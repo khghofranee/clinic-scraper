@@ -1,0 +1,20 @@
+You have access to 4 MCP tools: discover_clinics, scrape_platform, compute_rating, save_result.
+
+Run the weekly Ireland clinic rating update:
+
+For each of these 15 cities:
+Dublin, Cork, Galway, Limerick, Waterford, Drogheda, Dundalk,
+Swords, Bray, Navan, Ennis, Tralee, Kilkenny, Sligo, Clonmel
+
+Do the following:
+1. Call discover_clinics(city, "IE") to get all clinics in that city
+2. For each clinic returned, call scrape_platform for all 6 platforms:
+   google, whatclinic, facebook, trustpilot, localitybiz, yelp
+3. Call compute_rating with all 6 platform results
+4. Call save_result with the clinic_id, all platform results, and computed rating
+5. Move to the next clinic, then next city
+
+When fully done, reply with a summary:
+- Total clinics processed
+- Total platform snapshots saved
+- Any clinics that had 0 data across all platforms
