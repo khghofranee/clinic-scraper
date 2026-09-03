@@ -12,10 +12,17 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("Clinic Scraper")
+# Allow any host — required for Railway deployment
+mcp = FastMCP(
+    "Clinic Scraper",
+    host="0.0.0.0",
+    port=int(os.getenv("PORT", "8080")),
+)
 
-# Expose the ASGI app for uvicorn — this is what uvicorn serves
-app = mcp.sse_app()
+# Disable host/origin restrictions so Railway domain works
+mcp.settings.transport_security.allowed_hosts = ["*"]
+mcp.settings.transport_security.allowed_origins = ["*"]
+mcp.settings.transport_security.enable_dns_rebinding_protection = False
 
 PERPLEXITY_URL   = "https://api.perplexity.ai/chat/completions"
 PERPLEXITY_MODEL = "sonar"
@@ -117,16 +124,11 @@ async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any
                 SET name=EXCLUDED.name, clinic_type=EXCLUDED.clinic_type
                 """,
                 clinic_id, name, city,
-                item.get("type", "clinic"),
-                country,
-                item.get("address"),
+                item.get("type", "clinic"), country, item.get("address"),
             )
             clinics.append({
-                "clinic_id": clinic_id,
-                "name":      name,
-                "city":      city,
-                "type":      item.get("type", "clinic"),
-                "country":   country,
+                "clinic_id": clinic_id, "name": name,
+                "city": city, "type": item.get("type", "clinic"), "country": country,
             })
     finally:
         await conn.close()
@@ -137,12 +139,12 @@ async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any
 async def scrape_platform(clinic_name: str, city: str, country: str, platform: str) -> dict[str, Any]:
     """Use Perplexity to get rating + review count for a clinic on one platform."""
     country_name = COUNTRY_NAMES.get(country, country)
-    hint         = PLATFORM_HINTS.get(platform.lower(), f"{platform} listing")
-    system = "You are a precise web data extraction assistant. Search the web and return ONLY a raw JSON object. No markdown, no explanation. If the clinic has no listing, set fields to null."
+    hint = PLATFORM_HINTS.get(platform.lower(), f"{platform} listing")
+    system = "You are a precise web data extraction assistant. Search and return ONLY raw JSON. No markdown. Null if not found."
     user = (
         f"Search for the {hint} of '{clinic_name}' in {city}, {country_name}.\n"
-        f"Find the current average star rating (1.0-5.0) and total review count.\n"
-        f"Return ONLY:\n"
+        f"Find current average star rating (1.0-5.0) and total review count.\n"
+        f"Return ONLY: "
         f'{{"rating": <float or null>, "review_count": <integer or null>, "source_url": "<url or null>"}}'
     )
     data   = await _ask_perplexity(system, user)
@@ -191,9 +193,8 @@ async def save_result(
                      platform_rating, platform_reviews, source_url)
                 VALUES ($1,$2,$3,$4,$5,$6,$7)
                 """,
-                clinic_id, country, week,
-                pr["platform"], pr.get("rating"),
-                pr.get("review_count", 0), pr.get("source_url"),
+                clinic_id, country, week, pr["platform"],
+                pr.get("rating"), pr.get("review_count", 0), pr.get("source_url"),
             )
         platforms_scraped = [pr["platform"] for pr in platform_results if pr.get("rating")]
         await conn.execute(
@@ -219,3 +220,7 @@ async def save_result(
         "week_stamp": week, "marketplace_rating": marketplace_rating,
         "platforms_saved": len(platform_results),
     }
+
+
+if __name__ == "__main__":
+    mcp.run(transport="sse")
