@@ -1,11 +1,6 @@
 """
 Clinic Marketplace MCP Server
-==============================
-Tools Claude calls weekly via Elsa:
-  1. discover_clinics      – find all clinics in a city (Perplexity)
-  2. scrape_platform       – get rating + reviews per platform (Perplexity)
-  3. compute_rating        – weighted marketplace formula
-  4. save_result           – write snapshot rows to Postgres
+Tools: discover_clinics, scrape_platform, compute_rating, save_result
 """
 
 import json
@@ -15,14 +10,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-import asyncpg
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("Clinic Scraper")
 
-# ─────────────────────────────────────────────
-# Config
-# ─────────────────────────────────────────────
 PERPLEXITY_URL   = "https://api.perplexity.ai/chat/completions"
 PERPLEXITY_MODEL = "sonar"
 HTTP_TIMEOUT     = float(os.getenv("HTTP_TIMEOUT", "60"))
@@ -55,9 +46,6 @@ COUNTRY_NAMES = {
 }
 
 
-# ─────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────
 def _week_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-W%V")
 
@@ -65,7 +53,7 @@ def _week_stamp() -> str:
 async def _ask_perplexity(system: str, user: str) -> Any:
     api_key = os.getenv("PERPLEXITY_API_KEY")
     if not api_key:
-        raise RuntimeError("PERPLEXITY_API_KEY must be set")
+        raise RuntimeError("PERPLEXITY_API_KEY is not set")
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         resp = await client.post(
@@ -97,25 +85,21 @@ async def _ask_perplexity(system: str, user: str) -> Any:
         raise ValueError(f"Cannot parse Perplexity response: {clean[:300]}")
 
 
-async def _db() -> asyncpg.Connection:
+async def _get_db():
+    try:
+        import asyncpg
+    except ImportError:
+        raise RuntimeError("asyncpg not installed")
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        raise RuntimeError("DATABASE_URL must be set")
+        raise RuntimeError("DATABASE_URL is not set")
     return await asyncpg.connect(dsn)
 
 
-# ─────────────────────────────────────────────
-# Tool 1 – discover_clinics
-# ─────────────────────────────────────────────
 @mcp.tool()
 async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any]]:
-    """
-    Find all clinic names and types in a city using Perplexity web search.
-    Returns a list of {id, name, city, type, country}.
-    Also upserts each clinic into the DB so Claude can reference clinic_id later.
-    """
+    """Find all clinics in a city using Perplexity. Saves them to DB."""
     country_name = COUNTRY_NAMES.get(country, country)
-
     system = (
         "You are a web search assistant. Search thoroughly and return ONLY "
         "a raw JSON array. No markdown, no explanation."
@@ -123,32 +107,28 @@ async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any
     user = (
         f"Find ALL types of private clinics in {city}, {country_name}. "
         f"Include: dental, cosmetic, hair, laser, skin, eye, fertility, "
-        f"physio, GP, weight loss, orthodontic, and any others.\n"
-        f"Aim for 15+ real clinics.\n"
+        f"physio, GP, weight loss, orthodontic, and any others. Aim for 15+.\n"
         f"Return ONLY a JSON array:\n"
-        f'[{{"name": "...", "type": "dental|cosmetic|hair|etc", "address": "..."}}]'
+        f'[{{"name": "...", "type": "dental|cosmetic|etc", "address": "..."}}]'
     )
-
     data = await _ask_perplexity(system, user)
     if not isinstance(data, list):
         return []
 
-    conn = await _db()
+    conn = await _get_db()
     clinics = []
     try:
         for i, item in enumerate(data):
             name = (item.get("name") or "").strip()
             if not name:
                 continue
-            # Generate a stable ID from country + city + index
             clinic_id = f"clinic_{country.lower()}_{city.lower()[:3]}_{i+1:04d}"
-
             await conn.execute(
                 """
                 INSERT INTO clinics (id, name, city, clinic_type, country, address)
                 VALUES ($1,$2,$3,$4,$5,$6)
                 ON CONFLICT (id) DO UPDATE
-                    SET name=EXCLUDED.name, clinic_type=EXCLUDED.clinic_type
+                SET name=EXCLUDED.name, clinic_type=EXCLUDED.clinic_type
                 """,
                 clinic_id, name, city,
                 item.get("type", "clinic"),
@@ -164,13 +144,9 @@ async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any
             })
     finally:
         await conn.close()
-
     return clinics
 
 
-# ─────────────────────────────────────────────
-# Tool 2 – scrape_platform
-# ─────────────────────────────────────────────
 @mcp.tool()
 async def scrape_platform(
     clinic_name: str,
@@ -178,13 +154,9 @@ async def scrape_platform(
     country: str,
     platform: str,
 ) -> dict[str, Any]:
-    """
-    Use Perplexity to find a clinic's rating and review count on one platform.
-    Returns {platform, rating, review_count, source_url}.
-    """
+    """Use Perplexity to get rating + review count for a clinic on one platform."""
     country_name = COUNTRY_NAMES.get(country, country)
     hint         = PLATFORM_HINTS.get(platform.lower(), f"{platform} listing")
-
     system = (
         "You are a precise web data extraction assistant. "
         "Search the web and return ONLY a raw JSON object. "
@@ -193,18 +165,15 @@ async def scrape_platform(
     )
     user = (
         f"Search for the {hint} of '{clinic_name}' in {city}, {country_name}.\n"
-        f"Find the current average star rating (1.0–5.0) and total review count.\n"
+        f"Find the current average star rating (1.0-5.0) and total review count.\n"
         f"If multiple branches exist, pick the one with the most reviews.\n"
         f"Return ONLY:\n"
         f'{{"rating": <float or null>, "review_count": <integer or null>, "source_url": "<url or null>"}}'
     )
-
     data   = await _ask_perplexity(system, user)
     rating = float(data["rating"]) if data.get("rating") is not None else None
-
     if rating is not None and not (1.0 <= rating <= 5.0):
         rating = None
-
     return {
         "platform":     platform.lower(),
         "rating":       rating,
@@ -213,20 +182,13 @@ async def scrape_platform(
     }
 
 
-# ─────────────────────────────────────────────
-# Tool 3 – compute_rating
-# ─────────────────────────────────────────────
 @mcp.tool()
 def compute_rating(sources: list[dict[str, Any]]) -> dict[str, Any]:
-    """
-    Weighted marketplace rating: Σ(rating × reviews) / Σ(reviews).
-    Input: list of scrape_platform results.
-    """
+    """Weighted marketplace rating: sum(rating x reviews) / sum(reviews)."""
     valid = [s for s in sources if s.get("rating") and s.get("review_count")]
     total = sum(int(s["review_count"]) for s in valid)
     if not total:
         return {"marketplace_rating": None, "marketplace_reviews": 0}
-
     weighted = sum(float(s["rating"]) * int(s["review_count"]) for s in valid)
     return {
         "marketplace_rating":  round(weighted / total, 2),
@@ -235,27 +197,18 @@ def compute_rating(sources: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-# ─────────────────────────────────────────────
-# Tool 4 – save_result
-# ─────────────────────────────────────────────
 @mcp.tool()
 async def save_result(
-    clinic_id:            str,
-    country:              str,
-    platform_results:     list[dict[str, Any]],
-    marketplace_rating:   float | None,
-    marketplace_reviews:  int,
+    clinic_id:           str,
+    country:             str,
+    platform_results:    list[dict[str, Any]],
+    marketplace_rating:  float | None,
+    marketplace_reviews: int,
 ) -> dict[str, Any]:
-    """
-    Write one weekly snapshot to Postgres:
-    - One row per platform in platform_snapshots
-    - One row in marketplace_snapshots (upserted)
-    """
-    week  = _week_stamp()
-    conn  = await _db()
-
+    """Write weekly snapshot rows to Postgres."""
+    week = _week_stamp()
+    conn = await _get_db()
     try:
-        # ── per-platform rows ───────────────────────
         for pr in platform_results:
             await conn.execute(
                 """
@@ -270,8 +223,6 @@ async def save_result(
                 pr.get("review_count", 0),
                 pr.get("source_url"),
             )
-
-        # ── marketplace aggregate row ────────────────
         platforms_scraped = [pr["platform"] for pr in platform_results if pr.get("rating")]
         await conn.execute(
             """
@@ -292,7 +243,6 @@ async def save_result(
         )
     finally:
         await conn.close()
-
     return {
         "saved":              True,
         "clinic_id":          clinic_id,
@@ -303,4 +253,6 @@ async def save_result(
 
 
 if __name__ == "__main__":
-    mcp.run(transport="sse")
+    # Railway injects PORT — MCP SSE server must bind to it
+    port = int(os.getenv("PORT", "8000"))
+    mcp.run(transport="sse", host="0.0.0.0", port=port)
