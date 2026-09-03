@@ -14,17 +14,12 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("Clinic Scraper")
 
+# Expose the ASGI app for uvicorn — this is what uvicorn serves
+app = mcp.sse_app()
+
 PERPLEXITY_URL   = "https://api.perplexity.ai/chat/completions"
 PERPLEXITY_MODEL = "sonar"
 HTTP_TIMEOUT     = float(os.getenv("HTTP_TIMEOUT", "60"))
-
-COUNTRY_PLATFORMS: dict[str, list[str]] = {
-    "IE": ["google", "whatclinic", "facebook", "trustpilot", "localitybiz", "yelp"],
-    "GB": ["google", "trustpilot", "whatclinic", "facebook", "nhs", "doctify"],
-    "DE": ["google", "facebook", "trustpilot", "jameda"],
-    "HR": ["google", "facebook", "whatclinic", "najdoktor"],
-    "CH": ["google", "facebook", "trustpilot", "onedoc", "doctify"],
-}
 
 PLATFORM_HINTS = {
     "google":      "Google Maps / Google Reviews",
@@ -95,10 +90,7 @@ async def _get_db():
 async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any]]:
     """Find all clinics in a city using Perplexity. Saves them to DB."""
     country_name = COUNTRY_NAMES.get(country, country)
-    system = (
-        "You are a web search assistant. Search thoroughly and return ONLY "
-        "a raw JSON array. No markdown, no explanation."
-    )
+    system = "You are a web search assistant. Search thoroughly and return ONLY a raw JSON array. No markdown, no explanation."
     user = (
         f"Find ALL types of private clinics in {city}, {country_name}. "
         f"Include: dental, cosmetic, hair, laser, skin, eye, fertility, "
@@ -142,25 +134,14 @@ async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any
 
 
 @mcp.tool()
-async def scrape_platform(
-    clinic_name: str,
-    city: str,
-    country: str,
-    platform: str,
-) -> dict[str, Any]:
+async def scrape_platform(clinic_name: str, city: str, country: str, platform: str) -> dict[str, Any]:
     """Use Perplexity to get rating + review count for a clinic on one platform."""
     country_name = COUNTRY_NAMES.get(country, country)
     hint         = PLATFORM_HINTS.get(platform.lower(), f"{platform} listing")
-    system = (
-        "You are a precise web data extraction assistant. "
-        "Search the web and return ONLY a raw JSON object. "
-        "No markdown, no explanation. "
-        "If the clinic has no listing, set fields to null."
-    )
+    system = "You are a precise web data extraction assistant. Search the web and return ONLY a raw JSON object. No markdown, no explanation. If the clinic has no listing, set fields to null."
     user = (
         f"Search for the {hint} of '{clinic_name}' in {city}, {country_name}.\n"
         f"Find the current average star rating (1.0-5.0) and total review count.\n"
-        f"If multiple branches exist, pick the one with the most reviews.\n"
         f"Return ONLY:\n"
         f'{{"rating": <float or null>, "review_count": <integer or null>, "source_url": "<url or null>"}}'
     )
@@ -193,10 +174,9 @@ def compute_rating(sources: list[dict[str, Any]]) -> dict[str, Any]:
 
 @mcp.tool()
 async def save_result(
-    clinic_id:           str,
-    country:             str,
-    platform_results:    list[dict[str, Any]],
-    marketplace_rating:  float | None,
+    clinic_id: str, country: str,
+    platform_results: list[dict[str, Any]],
+    marketplace_rating: float | None,
     marketplace_reviews: int,
 ) -> dict[str, Any]:
     """Write weekly snapshot rows to Postgres."""
@@ -212,10 +192,8 @@ async def save_result(
                 VALUES ($1,$2,$3,$4,$5,$6,$7)
                 """,
                 clinic_id, country, week,
-                pr["platform"],
-                pr.get("rating"),
-                pr.get("review_count", 0),
-                pr.get("source_url"),
+                pr["platform"], pr.get("rating"),
+                pr.get("review_count", 0), pr.get("source_url"),
             )
         platforms_scraped = [pr["platform"] for pr in platform_results if pr.get("rating")]
         await conn.execute(
@@ -232,19 +210,12 @@ async def save_result(
                 computed_at         = NOW()
             """,
             clinic_id, country, week,
-            marketplace_rating, marketplace_reviews,
-            platforms_scraped,
+            marketplace_rating, marketplace_reviews, platforms_scraped,
         )
     finally:
         await conn.close()
     return {
-        "saved":              True,
-        "clinic_id":          clinic_id,
-        "week_stamp":         week,
-        "marketplace_rating": marketplace_rating,
-        "platforms_saved":    len(platform_results),
+        "saved": True, "clinic_id": clinic_id,
+        "week_stamp": week, "marketplace_rating": marketplace_rating,
+        "platforms_saved": len(platform_results),
     }
-
-
-if __name__ == "__main__":
-    mcp.run(transport="sse")
