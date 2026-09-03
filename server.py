@@ -83,10 +83,10 @@ async def _ask_perplexity(system: str, user: str) -> Any:
 
 async def _get_db():
     import asyncpg
-    dsn = (os.getenv("DATABASE_URL") or os.getenv("DATABASE_URL ", "")).strip()
+    dsn = (os.getenv("DATABASE_URL", os.getenv("DATABASE_URL ", "")).strip() or None or os.getenv("DATABASE_URL ", "")).strip()
     if not dsn:
         raise RuntimeError("DATABASE_URL is not set")
-    return await asyncpg.connect(dsn)
+    return await asyncpg.connect(dsn, statement_cache_size=0)
 
 @mcp.tool()
 async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any]]:
