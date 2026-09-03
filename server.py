@@ -46,11 +46,13 @@ COUNTRY_NAMES = {
     "DE": "Germany", "HR": "Croatia", "CH": "Switzerland",
 }
 
+
 def _week_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-W%V")
 
+
 async def _ask_perplexity(system: str, user: str) -> Any:
-    api_key = os.getenv("PERPLEXITY_API_KEY", os.getenv("PERPLEXITY_API_KEY ", "")).strip()
+    api_key = (os.getenv("PERPLEXITY_API_KEY") or os.getenv("PERPLEXITY_API_KEY ", "")).strip()
     if not api_key:
         raise RuntimeError("PERPLEXITY_API_KEY is not set")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
@@ -81,12 +83,28 @@ async def _ask_perplexity(system: str, user: str) -> Any:
                     continue
         raise ValueError(f"Cannot parse: {clean[:300]}")
 
+
 async def _get_db():
     import asyncpg
-    dsn = (os.getenv("DATABASE_URL", os.getenv("DATABASE_URL ", "")).strip() or None or os.getenv("DATABASE_URL ", "")).strip()
+    from urllib.parse import quote
+
+    dsn = (os.getenv("DATABASE_URL") or os.getenv("DATABASE_URL ", "")).strip()
     if not dsn:
         raise RuntimeError("DATABASE_URL is not set")
+
+    # Auto URL-encode special characters in password if not already encoded.
+    # Handles passwords containing ! # $ & + , / : ; = ? @ [ ] etc.
+    if "%" not in dsn:
+        try:
+            proto, rest = dsn.split("://", 1)
+            userinfo, hostpart = rest.split("@", 1)
+            user, password = userinfo.split(":", 1)
+            dsn = f"{proto}://{user}:{quote(password, safe='')}@{hostpart}"
+        except ValueError:
+            pass  # couldn't parse — leave dsn as-is and let asyncpg report the error
+
     return await asyncpg.connect(dsn, statement_cache_size=0)
+
 
 @mcp.tool()
 async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any]]:
@@ -113,12 +131,19 @@ async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any
                 "INSERT INTO clinics (id,name,city,clinic_type,country,address) "
                 "VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO UPDATE "
                 "SET name=EXCLUDED.name, clinic_type=EXCLUDED.clinic_type",
-                clinic_id, name, city, item.get("type","clinic"), country, item.get("address"),
+                clinic_id, name, city, item.get("type", "clinic"), country, item.get("address"),
             )
-            clinics.append({"clinic_id":clinic_id,"name":name,"city":city,"type":item.get("type","clinic"),"country":country})
+            clinics.append({
+                "clinic_id": clinic_id,
+                "name": name,
+                "city": city,
+                "type": item.get("type", "clinic"),
+                "country": country,
+            })
     finally:
         await conn.close()
     return clinics
+
 
 @mcp.tool()
 async def scrape_platform(clinic_name: str, city: str, country: str, platform: str) -> dict[str, Any]:
@@ -135,9 +160,13 @@ async def scrape_platform(clinic_name: str, city: str, country: str, platform: s
     rating = float(data["rating"]) if data.get("rating") is not None else None
     if rating is not None and not (1.0 <= rating <= 5.0):
         rating = None
-    return {"platform":platform.lower(),"rating":rating,
-            "review_count":int(data["review_count"]) if data.get("review_count") else 0,
-            "source_url":data.get("source_url")}
+    return {
+        "platform": platform.lower(),
+        "rating": rating,
+        "review_count": int(data["review_count"]) if data.get("review_count") else 0,
+        "source_url": data.get("source_url"),
+    }
+
 
 @mcp.tool()
 def compute_rating(sources: list[dict[str, Any]]) -> dict[str, Any]:
@@ -145,14 +174,23 @@ def compute_rating(sources: list[dict[str, Any]]) -> dict[str, Any]:
     valid = [s for s in sources if s.get("rating") and s.get("review_count")]
     total = sum(int(s["review_count"]) for s in valid)
     if not total:
-        return {"marketplace_rating":None,"marketplace_reviews":0}
-    weighted = sum(float(s["rating"])*int(s["review_count"]) for s in valid)
-    return {"marketplace_rating":round(weighted/total,2),"marketplace_reviews":total,
-            "platforms_scraped":[s["platform"] for s in valid]}
+        return {"marketplace_rating": None, "marketplace_reviews": 0}
+    weighted = sum(float(s["rating"]) * int(s["review_count"]) for s in valid)
+    return {
+        "marketplace_rating": round(weighted / total, 2),
+        "marketplace_reviews": total,
+        "platforms_scraped": [s["platform"] for s in valid],
+    }
+
 
 @mcp.tool()
-async def save_result(clinic_id: str, country: str, platform_results: list[dict[str,Any]],
-                      marketplace_rating: float | None, marketplace_reviews: int) -> dict[str,Any]:
+async def save_result(
+    clinic_id: str,
+    country: str,
+    platform_results: list[dict[str, Any]],
+    marketplace_rating: float | None,
+    marketplace_reviews: int,
+) -> dict[str, Any]:
     """Write weekly snapshot rows to Postgres."""
     week = _week_stamp()
     conn = await _get_db()
@@ -162,7 +200,7 @@ async def save_result(clinic_id: str, country: str, platform_results: list[dict[
                 "INSERT INTO platform_snapshots (clinic_id,country,week_stamp,platform,"
                 "platform_rating,platform_reviews,source_url) VALUES ($1,$2,$3,$4,$5,$6,$7)",
                 clinic_id, country, week, pr["platform"],
-                pr.get("rating"), pr.get("review_count",0), pr.get("source_url"),
+                pr.get("rating"), pr.get("review_count", 0), pr.get("source_url"),
             )
         await conn.execute(
             "INSERT INTO marketplace_snapshots (clinic_id,country,week_stamp,"
@@ -176,8 +214,14 @@ async def save_result(clinic_id: str, country: str, platform_results: list[dict[
         )
     finally:
         await conn.close()
-    return {"saved":True,"clinic_id":clinic_id,"week_stamp":week,
-            "marketplace_rating":marketplace_rating,"platforms_saved":len(platform_results)}
+    return {
+        "saved": True,
+        "clinic_id": clinic_id,
+        "week_stamp": week,
+        "marketplace_rating": marketplace_rating,
+        "platforms_saved": len(platform_results),
+    }
+
 
 if __name__ == "__main__":
     mcp.run(transport="sse")
