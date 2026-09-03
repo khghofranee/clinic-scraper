@@ -253,6 +253,7 @@ async def save_result(
 
 
 if __name__ == "__main__":
-    # Railway injects PORT — MCP SSE server must bind to it
-    port = int(os.getenv("PORT", "8000"))
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    port = int(os.getenv("PORT", "8080"))
+    os.environ["UVICORN_PORT"] = str(port)
+    os.environ["UVICORN_HOST"] = "0.0.0.0"
+    mcp.run(transport="sse")
