@@ -50,7 +50,7 @@ def _week_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-W%V")
 
 async def _ask_perplexity(system: str, user: str) -> Any:
-    api_key = os.getenv("PERPLEXITY_API_KEY")
+    api_key = os.getenv("PERPLEXITY_API_KEY", os.getenv("PERPLEXITY_API_KEY ", "")).strip()
     if not api_key:
         raise RuntimeError("PERPLEXITY_API_KEY is not set")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
