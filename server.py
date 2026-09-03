@@ -11,6 +11,8 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 mcp = FastMCP(
     "Clinic Scraper",
@@ -221,6 +223,12 @@ async def save_result(
         "marketplace_rating": marketplace_rating,
         "platforms_saved": len(platform_results),
     }
+
+
+# Health check endpoint so Railway only routes to healthy containers
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
 
 
 if __name__ == "__main__":
