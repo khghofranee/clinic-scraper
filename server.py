@@ -180,4 +180,4 @@ async def save_result(clinic_id: str, country: str, platform_results: list[dict[
             "marketplace_rating":marketplace_rating,"platforms_saved":len(platform_results)}
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="sse")
