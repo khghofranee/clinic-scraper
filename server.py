@@ -11,14 +11,18 @@ from typing import Any
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
-# Allow any host — required for Railway deployment
 mcp = FastMCP(
     "Clinic Scraper",
     host="0.0.0.0",
     port=int(os.getenv("PORT", "8080")),
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+        allowed_hosts=["*"],
+        allowed_origins=["*"],
+    )
 )
-
 # Disable host/origin restrictions so Railway domain works
 mcp.settings.transport_security.allowed_hosts = ["*"]
 mcp.settings.transport_security.allowed_origins = ["*"]
