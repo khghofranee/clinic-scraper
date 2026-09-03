@@ -54,7 +54,6 @@ async def _ask_perplexity(system: str, user: str) -> Any:
     api_key = os.getenv("PERPLEXITY_API_KEY")
     if not api_key:
         raise RuntimeError("PERPLEXITY_API_KEY is not set")
-
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         resp = await client.post(
             PERPLEXITY_URL,
@@ -69,7 +68,6 @@ async def _ask_perplexity(system: str, user: str) -> Any:
             },
         )
         resp.raise_for_status()
-
     raw   = resp.json()["choices"][0]["message"]["content"].strip()
     clean = re.sub(r"```(?:json)?|```", "", raw).strip()
     try:
@@ -86,10 +84,7 @@ async def _ask_perplexity(system: str, user: str) -> Any:
 
 
 async def _get_db():
-    try:
-        import asyncpg
-    except ImportError:
-        raise RuntimeError("asyncpg not installed")
+    import asyncpg
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
         raise RuntimeError("DATABASE_URL is not set")
@@ -114,7 +109,6 @@ async def discover_clinics(city: str, country: str = "IE") -> list[dict[str, Any
     data = await _ask_perplexity(system, user)
     if not isinstance(data, list):
         return []
-
     conn = await _get_db()
     clinics = []
     try:
@@ -253,7 +247,4 @@ async def save_result(
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8080"))
-    os.environ["UVICORN_PORT"] = str(port)
-    os.environ["UVICORN_HOST"] = "0.0.0.0"
     mcp.run(transport="sse")
