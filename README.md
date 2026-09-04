@@ -231,28 +231,6 @@ When done report:
 
 ---
 
-## Known issues and fixes
-
-| Issue | Fix |
-|---|---|
-| `mcp` v2 broke `FastMCP` import | Pinned `mcp[cli]<2` in `requirements.txt` |
-| Railway PORT not respected | `FastMCP` constructor receives `host` and `port` from env |
-| `Invalid Host header` from Railway domain | `TransportSecuritySettings` with DNS rebinding protection disabled |
-| Railway adds trailing space to env var names | Code reads both `KEY` and `KEY ` then strips |
-| Special chars `!` `#` in DB password | URL-encoded in `_get_db()`: `!` → `%21`, `#` → `%23` |
-
----
-
-## What's next
-
-- [ ] `list_clinics(country)` tool — skip discovery on repeat runs, use existing DB records
-- [ ] Elsa scheduled workflow — weekly CRON trigger
-- [ ] Alerting — notify if >20% of clinics return no data
-- [ ] Dashboard — Supabase view for `marketplace_snapshots`
-- [ ] Multi-country — activate GB, DE, HR, CH (config already in `server.py`)
-
----
-
 ## Infrastructure
 
 | Service | Detail |
